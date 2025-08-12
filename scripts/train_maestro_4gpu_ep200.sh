@@ -6,10 +6,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+
 CUDA_VISIBLE_DEVICES=0,1,2,3 python train_multi_gpu.py \
   distributed.world_size=4 \
   common.max_epoch=200 \
-  checkpoint.save_folder=/root/autodl-tmp/checkpoint/encodec_maestro_4gpus_ep200 \
-  hydra.run.dir=/root/autodl-tmp/output/encodec_maestro_4gpus_ep200
+  checkpoint.save_folder=/root/autodl-tmp/checkpoint/encodec_maestro_4gpus_ep200_3 \
+  hydra.run.dir=/root/autodl-tmp/output/encodec_maestro_4gpus_ep200_3
 
 

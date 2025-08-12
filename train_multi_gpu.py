@@ -179,10 +179,16 @@ def test(epoch, model, disc_model, testloader, config, writer):
         writer.add_scalar('Test/Loss_Disc', loss_disc.item(), epoch)
         logger.info(log_msg)
 
-        # save a sample reconstruction (not cropped)
+        # save a sample reconstruction with a safe max length to avoid OOM (no AMP)
         input_wav, _ = testloader.dataset.get()
         input_wav = input_wav.cuda()
-        output = model(input_wav.unsqueeze(0)).squeeze(0)
+        max_demo_len = (
+            config.datasets.tensor_cut
+            if hasattr(config.datasets, 'tensor_cut') and config.datasets.tensor_cut and config.datasets.tensor_cut > 0
+            else 72000
+        )
+        demo_wav = input_wav[..., : min(input_wav.shape[-1], max_demo_len)]
+        output = model(demo_wav.unsqueeze(0)).squeeze(0)
         # summarywriter can't log stereo files 😅 so just save examples
         sp = Path(config.checkpoint.save_folder)
         torchaudio.save(sp/f'GT.wav', input_wav.cpu(), config.model.sample_rate)
