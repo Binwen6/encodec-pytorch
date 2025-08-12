@@ -102,14 +102,33 @@ def train_one_step(epoch,optimizer,optimizer_disc, model, disc_model, trainloade
 
         # only update discriminator with probability from paper (configure)
         optimizer_disc.zero_grad()
-        train_discriminator = torch.BoolTensor([config.model.train_discriminator 
-                               and epoch >= config.lr_scheduler.warmup_epoch 
-                               and random.random() < float(eval(config.model.train_discriminator))]).cuda()
+        # support boolean/float/fraction-string (e.g., "2/3") for train_discriminator
+        td_value = config.model.train_discriminator
+        if isinstance(td_value, bool):
+            td_prob = 1.0 if td_value else 0.0
+        elif isinstance(td_value, (int, float)):
+            td_prob = float(td_value)
+        elif isinstance(td_value, str):
+            s = td_value.strip()
+            if '/' in s:
+                num, den = s.split('/', 1)
+                td_prob = float(num) / float(den)
+            else:
+                td_prob = float(s)
+        else:
+            raise TypeError(f"Unsupported type for model.train_discriminator: {type(td_value)}")
+
+        train_disc_flag = (
+            (td_prob > 0.0)
+            and (epoch >= config.lr_scheduler.warmup_epoch)
+            and (random.random() < td_prob)
+        )
+        train_discriminator = torch.tensor([train_disc_flag], dtype=torch.bool, device='cuda')
         # fix https://github.com/ZhikangNiu/encodec-pytorch/issues/30
         if dist.is_initialized():
             dist.broadcast(train_discriminator, 0)
 
-        if train_discriminator:
+        if train_discriminator.item():
             with autocast(enabled=config.common.amp):
                 logits_real, _ = disc_model(input_wav)
                 logits_fake, _ = disc_model(output.detach()) # detach to avoid backpropagation to model
