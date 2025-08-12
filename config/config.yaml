@@ -7,6 +7,7 @@ common:
   amp: False
 
 datasets:
+  audio_root: '/root/autodl-tmp/maestro-v3.0.0'
   train_csv_path: '/root/autodl-tmp/maestro-v3.0.0/maestro-v3.0.0.csv'
   test_csv_path: '/root/autodl-tmp/maestro-v3.0.0/maestro-v3.0.0.csv'
   batch_size: 12
@@ -32,7 +33,7 @@ lr_scheduler:
 model:
   target_bandwidths: [1.5, 3., 6., 12., 24.]
   sample_rate: 24_000
-  channels: 1
+  channels: 2
   train_discriminator: True # you can set it to 2/3 and other number to train discriminator only
   audio_normalize: True
   filters: 32
