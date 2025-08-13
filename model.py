@@ -333,13 +333,25 @@ class EncodecModel(nn.Module):
         print("loading model from: ",checkpoint)
         target_bandwidths = [1.5, 3., 6, 12., 24.]
         sample_rate = 24_000
-        channels = 1
+        # Match training defaults from config: stereo (2 ch), causal True, weight_norm
+        channels = 2
         model = EncodecModel._get_model(
                 target_bandwidths, sample_rate, channels,
-                causal=False, model_norm='time_group_norm', audio_normalize=True,
+                causal=True, model_norm='weight_norm', audio_normalize=True,
                 segment=None, name='my_encodec',ratios=ratios)
-        pre_dic = torch.load(checkpoint)['model_state_dict']
-        model.load_state_dict({k.replace('quantizer.model','quantizer.vq'):v for k,v in pre_dic.items()})
+        pre_dic = torch.load(checkpoint, map_location='cpu')['model_state_dict']
+        # Robustly map possible key name differences from training to inference
+        remapped = {}
+        for k, v in pre_dic.items():
+            nk = k
+            nk = nk.replace('quantizer.model', 'quantizer.vq')
+            nk = nk.replace('oder.', 'decoder.')
+            remapped[nk] = v
+        missing, unexpected = model.load_state_dict(remapped, strict=False)
+        if missing:
+            print(f"Warning: missing keys when loading: {missing}")
+        if unexpected:
+            print(f"Warning: unexpected keys when loading: {unexpected}")
         model.eval()
         return model
     
