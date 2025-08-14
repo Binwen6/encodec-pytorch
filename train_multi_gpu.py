@@ -183,7 +183,8 @@ def test(epoch, model, disc_model, testloader, config, writer):
         input_wav, _ = testloader.dataset.get()
         input_wav = input_wav.cuda()
         max_demo_len = (
-            config.datasets.tensor_cut
+            # config.datasets.tensor_cut
+            240000
             if hasattr(config.datasets, 'tensor_cut') and config.datasets.tensor_cut and config.datasets.tensor_cut > 0
             # else 72000
             else 240000
