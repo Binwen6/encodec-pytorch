@@ -185,7 +185,8 @@ def test(epoch, model, disc_model, testloader, config, writer):
         max_demo_len = (
             config.datasets.tensor_cut
             if hasattr(config.datasets, 'tensor_cut') and config.datasets.tensor_cut and config.datasets.tensor_cut > 0
-            else 72000
+            # else 72000
+            else 240000
         )
         demo_wav = input_wav[..., : min(input_wav.shape[-1], max_demo_len)]
         output = model(demo_wav.unsqueeze(0)).squeeze(0)
@@ -349,7 +350,12 @@ def train(local_rank,world_size,config,tmp_file=None):
             broadcast_buffers=False,
             find_unused_parameters=config.distributed.find_unused_parameters)
     if not config.distributed.data_parallel or dist.get_rank() == 0:  
-        writer = SummaryWriter(log_dir=f'{config.checkpoint.save_folder}/runs')  
+        # Prefer explicit tensorboard.log_dir if provided; fallback to previous behavior
+        tb_log_dir = (
+            config.tensorboard.log_dir if hasattr(config, 'tensorboard') and hasattr(config.tensorboard, 'log_dir') and config.tensorboard.log_dir
+            else f'{config.checkpoint.save_folder}/runs'
+        )
+        writer = SummaryWriter(log_dir=tb_log_dir)  
         logger.info(f'Saving tensorboard logs to {Path(writer.log_dir).resolve()}')
     else:  
         writer = None  

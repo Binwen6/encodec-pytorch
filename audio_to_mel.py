@@ -22,7 +22,7 @@ class Audio2Mel(nn.Module):
         ##############################################
         window = torch.hann_window(win_length, device=device).float()
         mel_basis = librosa_mel_fn(sr=sampling_rate,n_fft=n_fft,n_mels=n_mel_channels,fmin=mel_fmin,fmax=mel_fmax)
-        mel_basis = torch.from_numpy(mel_basis).cuda().float()
+        mel_basis = torch.from_numpy(mel_basis).to(device).float()
         self.register_buffer("mel_basis", mel_basis)
         self.register_buffer("window", window)
         self.n_fft = n_fft
@@ -37,7 +37,7 @@ class Audio2Mel(nn.Module):
         if len(shape) > 2:
             audioin = audioin.reshape(shape[0] * shape[1], -1)
         p = (self.n_fft - self.hop_length) // 2
-        audio = F.pad(audioin, (p, p), "reflect")
+        audio = F.pad(audioin.to(self.window.device), (p, p), "reflect")
         fft = torch.stft(
             audio,
             n_fft=self.n_fft,

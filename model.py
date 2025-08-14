@@ -255,7 +255,8 @@ class EncodecModel(nn.Module):
         quantizer = qt.ResidualVectorQuantizer(
             dimension=encoder.dimension,
             n_q=n_q,
-            bins=1024,
+            # bins=1024,
+            bins=256,
         )
         model = EncodecModel(
             encoder,
