@@ -1,0 +1,41 @@
+#Electrodes positions for the CA-209
+#DISCLAIMER: These electrodes were acquired on a standard MNI brain, please refer to our user documentation (UDO-SM-1065rev01) for further details
+#We do not export the REF and GND channels per cap from our acquisition software (eego) so please make sure that the number of data channels in the EEG export is equal to the number of channel labels/positions in the .elc file below. Additional positions (such as the REF and GND electrode locations) have been added in this file 
+# 32 electrodes
+NumberPositions=	32
+UnitPosition	mm
+Positions
+Fp1	:	98.4	29.0	31.7
+Fpz	:	103.2	-0.1	35.2
+Fp2	:	98.6	-29.2	31.6
+F7	:	59.2	72.4	30.5
+F3	:	66.6	48.3	76.5
+Fz	:	70.6	-0.3	95.1
+F4	:	67.0	-48.9	76.3
+F8	:	59.8	-72.9	30.2
+FC5	:	35.2	76.5	64.3
+FC1	:	41.4	31.5	110.2
+FC2	:	41.7	-32.5	110.1
+FC6	:	35.8	-77.3	63.9
+AFz	:	93.5	-0.2	68.4
+T7	:	1.9	86.5	35.5
+C3	:	6.5	61.4	99.1
+Cz	:	8.8	-0.7	126.0
+C4	:	7.0	-62.6	98.8
+T8	:	2.6	-87.5	35.2
+FT10	:	30.1	-85.2	-3.4
+CP5	:	-27.9	79.4	73.4
+CP1	:	-26.1	33.7	123.9
+CP2	:	-25.8	-35.3	123.7
+CP6	:	-27.2	-80.8	73.0
+P7	:	-58.0	75.5	44.4
+P3	:	-58.3	51.0	95.6
+Pz	:	-59.4	-0.9	117.6
+P4	:	-57.9	-52.8	95.4
+P8	:	-57.3	-77.0	44.1
+FT9	:	29.4	84.7	-3.1
+O1	:	-96.4	29.8	55.6
+Oz	:	-99.2	-1.0	60.2
+O2	:	-96.2	-31.7	55.4
+Labels
+Fp1 Fpz Fp2 F7 F3 Fz F4 F8 FC5 FC1 FC2 FC6 M1 T7 C3 Cz C4 T8 M2 CP5 CP1 CP2 CP6 P7 P3 Pz P4 P8 POz O1 Oz O2
