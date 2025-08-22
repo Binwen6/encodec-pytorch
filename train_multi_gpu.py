@@ -109,19 +109,36 @@ class EEGEncodecWrapper(torch.nn.Module):
             p.requires_grad = False
         for p in self.decoder.parameters():
             p.requires_grad = False
+        # Ensure frozen modules are in eval mode (no running stat/codebook updates)
+        self.quantizer.eval()
+        self.decoder.eval()
         # Build EEG encoder; align latent time with decoder expectations
         self.eeg_encoder = EEGEncoderSEAMamba(target_frames=target_frames)
         self.frame_rate = int(frame_rate)
         self.vq_weight = float(vq_weight)
+
+    def train(self, mode: bool = True):
+        # Keep parent behavior for train/eval switching, but force frozen parts to eval
+        super().train(mode)
+        self.quantizer.eval()
+        self.decoder.eval()
+        return self
 
     def forward(self, eeg: torch.Tensor):
         # eeg: [B, 32, 4000]
         emb = self.eeg_encoder(eeg)  # [B, D, T_code]
         qv = self.quantizer(emb, self.frame_rate, max(self.decoder.bandwidths) if hasattr(self.decoder, 'bandwidths') else 6.0)
         quantized = qv.quantized
-        wav_hat = self.decoder(quantized)
+        # Straight-through estimator to preserve gradient flow to EEG encoder even if quantizer is eval/frozen
+        quantized_st = quantized + (emb - emb.detach())
+        wav_hat = self.decoder(quantized_st)
         aux = { 'vq_penalty': qv.penalty }
-        loss_w = self.vq_weight * qv.penalty
+        penalty = qv.penalty
+        # If penalty doesn't carry gradients (e.g., quantizer in eval), fall back to a commitment loss surrogate
+        if not isinstance(penalty, torch.Tensor) or not penalty.requires_grad:
+            penalty = torch.mean((emb - quantized.detach()) ** 2)
+            aux['commitment_surrogate'] = penalty
+        loss_w = self.vq_weight * penalty
         return wav_hat, loss_w, aux
 
 warnings.filterwarnings("ignore")
@@ -410,6 +427,10 @@ def train(local_rank,world_size,config,tmp_file=None):
     logger.info(model)
     logger.info(disc_model)
     logger.info(config)
+    # Explicitly report whether real Mamba is used
+    if use_eeg_pair and hasattr(model, 'eeg_encoder') and hasattr(model.eeg_encoder, 'mamba'):
+        mamba_module = model.eeg_encoder.mamba.__class__.__module__
+        logger.info(f"EEG Mamba implementation: {mamba_module} | using_mamba={( 'mamba_ssm' in mamba_module )}")
     logger.info(f"Encodec Model Parameters: {count_parameters(model)} | Disc Model Parameters: {count_parameters(disc_model)}")
     logger.info(f"model train mode :{model.training} | quantizer train mode :{model.quantizer.training} ")
 
