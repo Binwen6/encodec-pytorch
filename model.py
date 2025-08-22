@@ -252,12 +252,12 @@ class EncodecModel(nn.Module):
         encoder = m.SEANetEncoder(channels=channels, norm=model_norm, causal=causal,ratios=ratios)
         decoder = m.SEANetDecoder(channels=channels, norm=model_norm, causal=causal,ratios=ratios)
         # n_q = int(1000 * target_bandwidths[-1] // (math.ceil(sample_rate / encoder.hop_length) * 10)) # int(1000*24//(math.ceil(24000/320)*10))
-        n_q = 2
+        n_q = 4
         quantizer = qt.ResidualVectorQuantizer(
             dimension=encoder.dimension,
             n_q=n_q,
-            bins=1024,
-            # bins=256,
+            # bins=1024,
+            bins=256,
         )
         model = EncodecModel(
             encoder,

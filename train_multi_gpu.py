@@ -282,7 +282,8 @@ def test(epoch, model, disc_model, testloader, config, writer):
             output, _, _ = model(eeg)
         else:
             input_wav = batch.cuda()
-            output = model(input_wav)
+            _out = model(input_wav)
+            output = _out[0] if isinstance(_out, tuple) else _out
         logits_real, fmap_real = disc_model(input_wav)
         logits_fake, fmap_fake = disc_model(output)
         loss_disc = disc_loss(logits_real, logits_fake) # compute discriminator loss
@@ -300,11 +301,13 @@ def test(epoch, model, disc_model, testloader, config, writer):
             eeg, input_wav = testloader.dataset[0]
             eeg = eeg.cuda().unsqueeze(0)
             input_wav = input_wav.cuda()
-            output = model(eeg).squeeze(0)
+            _out = model(eeg)
+            output = (_out[0] if isinstance(_out, tuple) else _out).squeeze(0)
         else:
             input_wav, _ = testloader.dataset.get()
             input_wav = input_wav.cuda()
-            output = model(input_wav.unsqueeze(0)).squeeze(0)
+            _out = model(input_wav.unsqueeze(0))
+            output = (_out[0] if isinstance(_out, tuple) else _out).squeeze(0)
         max_demo_len = (
             # config.datasets.tensor_cut
             240000

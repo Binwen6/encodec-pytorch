@@ -60,7 +60,7 @@ model:
 
 distributed:
   data_parallel: True
-  world_size: 4
+  world_size: 1
   find_unused_parameters: False
   torch_distributed_debug: False
   init_method: tcp
