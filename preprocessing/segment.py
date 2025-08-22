@@ -96,6 +96,38 @@ def load_data(path = None):
     event_duration = 8  # 取每个事件后8秒的数据
     return raw, groups, event_ids, event_duration, events
 
+def export_fif_dir_to_npy(in_dir: str,
+                          out_dir: str,
+                          expected_len_sec: float = 8.0,
+                          sfreq: int = 500) -> None:
+    """
+    将目录下的 .fif 片段批量导出为 .npy，形状为 [channels, time]。
+
+    参数
+    ----
+    in_dir: 包含 .fif 文件的输入目录
+    out_dir: 输出 .npy 目录（会自动创建）
+    expected_len_sec: 期望的片段时长（秒），默认 8 秒
+    sfreq: 片段采样率（Hz），默认 500 Hz
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    expected_samples = int(expected_len_sec * sfreq)
+    for fname in sorted(os.listdir(in_dir)):
+        if not fname.lower().endswith('.fif'):
+            continue
+        fpath = os.path.join(in_dir, fname)
+        raw = mne.io.read_raw_fif(fpath, preload=True, verbose=False)
+        data = raw.get_data()  # (channels, time)
+        # 对齐到固定长度
+        if data.shape[1] < expected_samples:
+            pad = expected_samples - data.shape[1]
+            data = np.pad(data, ((0, 0), (0, pad)), mode='constant')
+        elif data.shape[1] > expected_samples:
+            data = data[:, :expected_samples]
+        data = data.astype(np.float32, copy=False)
+        out_name = os.path.splitext(fname)[0] + '.npy'
+        np.save(os.path.join(out_dir, out_name), data)
+
 def main():
     # 遍历每组，取前5个事件并截取10秒
     save_root = '/root/autodl-tmp/eeg_processed'

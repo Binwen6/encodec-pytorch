@@ -2,13 +2,13 @@ einops
 hydra-core
 librosa
 matplotlib
-numpy
+# numpy
 pandas
-pesq
-pystoi
+# pesq
+# pystoi
 scikit_learn
 soundfile
-torch>=1.13.0
-torchaudio>=0.13.0
+# torch>=1.13.0
+# torchaudio>=0.13.0
 tqdm
 tensorboard

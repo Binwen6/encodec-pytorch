@@ -12,6 +12,7 @@ import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 import torchaudio
+import numpy as np
 
 import customAudioDataset as data
 from customAudioDataset import collate_fn
@@ -22,6 +23,106 @@ from scheduler import WarmupCosineLrScheduler
 from utils import (count_parameters, save_master_checkpoint, set_seed,
                    start_dist_train)
 from balancer import Balancer
+
+# -----------------------------------------------------------------------------
+# EEG pair dataset and wrapper model
+# -----------------------------------------------------------------------------
+try:
+    from modules_v2.CNN_Mamba_v2 import EEGEncoderSEAMamba  # type: ignore
+except Exception:
+    EEGEncoderSEAMamba = None  # will error later if eeg_pair is requested
+
+
+class EEGAudioDataset(torch.utils.data.Dataset):
+    """Dataset providing (EEG segment, target audio) pairs.
+
+    Expects EEG segments saved as .npy shaped [32, 4000] at 500 Hz and a single
+    reference audio clip to be repeated for each EEG segment. Audio is loaded
+    once, resampled to the configured sample rate and trimmed/padded to exactly
+    ``config.datasets.tensor_cut`` samples.
+    """
+
+    def __init__(self, config, mode: str = 'train'):
+        self.eeg_dir = config.datasets.eeg_dir
+        self.sample_rate = int(config.model.sample_rate)
+        self.expected_audio_len = int(config.datasets.tensor_cut)
+        self.rng = np.random.RandomState(config.common.seed)
+
+        # Enumerate EEG npy files deterministically
+        self.eeg_files = sorted([
+            os.path.join(self.eeg_dir, f)
+            for f in os.listdir(self.eeg_dir)
+            if f.lower().endswith('.npy')
+        ])
+        if not self.eeg_files:
+            raise RuntimeError(f"No .npy files found in {self.eeg_dir}")
+
+        # Load audio once
+        audio_path = config.datasets.audio_path
+        wav, sr = torchaudio.load(audio_path)  # [C, T]
+        if sr != self.sample_rate:
+            wav = torchaudio.functional.resample(wav, sr, self.sample_rate)
+        # Ensure mono
+        if wav.size(0) > 1:
+            wav = wav.mean(dim=0, keepdim=True)
+        # Trim/pad to exact length
+        if wav.size(1) < self.expected_audio_len:
+            pad = self.expected_audio_len - wav.size(1)
+            wav = torch.nn.functional.pad(wav, (0, pad))
+        elif wav.size(1) > self.expected_audio_len:
+            wav = wav[:, : self.expected_audio_len]
+        self.audio = wav.contiguous()  # [1, expected_len]
+
+    def __len__(self):
+        return len(self.eeg_files)
+
+    def __getitem__(self, index: int):
+        eeg_np = np.load(self.eeg_files[index]).astype(np.float32)  # [32, 4000]
+        eeg = torch.from_numpy(eeg_np)  # [C_eeg, T_eeg]
+        target = self.audio.clone()     # [1, T]
+        return eeg, target
+
+
+def eeg_collate_fn(batch):
+    eegs, targets = zip(*batch)
+    eeg = torch.stack(eegs, dim=0).contiguous()        # [B, 32, 4000]
+    target = torch.stack(targets, dim=0).contiguous()  # [B, 1, T]
+    return eeg, target
+
+
+class EEGEncodecWrapper(torch.nn.Module):
+    """Wrap an EEG encoder with EnCodec quantizer and decoder.
+
+    Returns output waveform and an auxiliary loss term (here, VQ penalty scaled)
+    to be summed into the original training objective.
+    """
+
+    def __init__(self, base_encodec_model, frame_rate: int, target_frames: int, vq_weight: float = 0.1):
+        super().__init__()
+        if EEGEncoderSEAMamba is None:
+            raise ImportError("EEGEncoderSEAMamba not available. Please ensure modules_v2/CNN_Mamba_v2.py exists.")
+        # Use provided EnCodec components
+        self.quantizer = base_encodec_model.quantizer
+        self.decoder = base_encodec_model.decoder
+        # Freeze quantizer and decoder
+        for p in self.quantizer.parameters():
+            p.requires_grad = False
+        for p in self.decoder.parameters():
+            p.requires_grad = False
+        # Build EEG encoder; align latent time with decoder expectations
+        self.eeg_encoder = EEGEncoderSEAMamba(target_frames=target_frames)
+        self.frame_rate = int(frame_rate)
+        self.vq_weight = float(vq_weight)
+
+    def forward(self, eeg: torch.Tensor):
+        # eeg: [B, 32, 4000]
+        emb = self.eeg_encoder(eeg)  # [B, D, T_code]
+        qv = self.quantizer(emb, self.frame_rate, max(self.decoder.bandwidths) if hasattr(self.decoder, 'bandwidths') else 6.0)
+        quantized = qv.quantized
+        wav_hat = self.decoder(quantized)
+        aux = { 'vq_penalty': qv.penalty }
+        loss_w = self.vq_weight * qv.penalty
+        return wav_hat, loss_w, aux
 
 warnings.filterwarnings("ignore")
 
@@ -53,12 +154,21 @@ def train_one_step(epoch,optimizer,optimizer_disc, model, disc_model, trainloade
     accumulated_loss_w = 0.0
     accumulated_loss_disc = 0.0
 
-    for idx,input_wav in enumerate(trainloader):
+    is_eeg_pair = hasattr(config.datasets, 'type') and str(config.datasets.type) == 'eeg_pair'
+    for idx,batch in enumerate(trainloader):
         # warmup learning rate, warmup_epoch is defined in config file,default is 5
-        input_wav = input_wav.contiguous().cuda() #[B, 1, T]: eg. [2, 1, 203760]
+        if is_eeg_pair:
+            eeg, target_wav = batch
+            eeg = eeg.contiguous().cuda()            # [B, 32, 4000]
+            input_wav = target_wav.contiguous().cuda()  # [B, 1, T]
+        else:
+            input_wav = batch.contiguous().cuda() #[B, 1, T]: eg. [2, 1, 203760]
         optimizer.zero_grad()
         with autocast(enabled=config.common.amp):
-            output, loss_w, _ = model(input_wav) #output: [B, 1, T]: eg. [2, 1, 203760] | loss_w: [1] 
+            if is_eeg_pair:
+                output, loss_w, _ = model(eeg) # EEG -> wav
+            else:
+                output, loss_w, _ = model(input_wav) # wav -> wav
             logits_real, fmap_real = disc_model(input_wav)
             logits_fake, fmap_fake = disc_model(output)
             losses_g = total_loss(
@@ -163,10 +273,16 @@ def train_one_step(epoch,optimizer,optimizer_disc, model, disc_model, trainloade
 @torch.no_grad()
 def test(epoch, model, disc_model, testloader, config, writer):
     model.eval()
-    for idx, input_wav in enumerate(testloader):
-        input_wav = input_wav.cuda()
-
-        output = model(input_wav)
+    is_eeg_pair = hasattr(config.datasets, 'type') and str(config.datasets.type) == 'eeg_pair'
+    for idx, batch in enumerate(testloader):
+        if is_eeg_pair:
+            eeg, target = batch
+            eeg = eeg.cuda()
+            input_wav = target.cuda()
+            output, _, _ = model(eeg)
+        else:
+            input_wav = batch.cuda()
+            output = model(input_wav)
         logits_real, fmap_real = disc_model(input_wav)
         logits_fake, fmap_fake = disc_model(output)
         loss_disc = disc_loss(logits_real, logits_fake) # compute discriminator loss
@@ -180,8 +296,15 @@ def test(epoch, model, disc_model, testloader, config, writer):
         logger.info(log_msg)
 
         # save a sample reconstruction with a safe max length to avoid OOM (no AMP)
-        input_wav, _ = testloader.dataset.get()
-        input_wav = input_wav.cuda()
+        if is_eeg_pair:
+            eeg, input_wav = testloader.dataset[0]
+            eeg = eeg.cuda().unsqueeze(0)
+            input_wav = input_wav.cuda()
+            output = model(eeg).squeeze(0)
+        else:
+            input_wav, _ = testloader.dataset.get()
+            input_wav = input_wav.cuda()
+            output = model(input_wav.unsqueeze(0)).squeeze(0)
         max_demo_len = (
             # config.datasets.tensor_cut
             240000
@@ -190,7 +313,6 @@ def test(epoch, model, disc_model, testloader, config, writer):
             else 240000
         )
         demo_wav = input_wav[..., : min(input_wav.shape[-1], max_demo_len)]
-        output = model(demo_wav.unsqueeze(0)).squeeze(0)
         # summarywriter can't log stereo files 😅 so just save examples
         sp = Path(config.checkpoint.save_folder)
         torchaudio.save(sp/f'GT.wav', input_wav.cpu(), config.model.sample_rate)
@@ -220,10 +342,19 @@ def train(local_rank,world_size,config,tmp_file=None):
         set_seed(config.common.seed)
 
     # set train dataset
-    trainset = data.CustomAudioDataset(config=config)
-    testset = data.CustomAudioDataset(config=config,mode='test')
+    use_eeg_pair = hasattr(config.datasets, 'type') and str(config.datasets.type) == 'eeg_pair'
+    if use_eeg_pair:
+        full = EEGAudioDataset(config=config)
+        n_total = len(full)
+        n_train = int(n_total * float(getattr(config.datasets, 'train_ratio', 0.8)))
+        n_test = n_total - n_train
+        generator = torch.Generator().manual_seed(config.common.seed)
+        trainset, testset = torch.utils.data.random_split(full, [n_train, n_test], generator=generator)
+    else:
+        trainset = data.CustomAudioDataset(config=config)
+        testset = data.CustomAudioDataset(config=config,mode='test')
     # set encodec model and discriminator model
-    model = EncodecModel._get_model(
+    base_model = EncodecModel._get_model(
         config.model.target_bandwidths, 
         config.model.sample_rate, 
         config.model.channels,
@@ -232,6 +363,13 @@ def train(local_rank,world_size,config,tmp_file=None):
         segment=eval(config.model.segment), name=config.model.name,
         ratios=config.model.ratios,
     )
+    if use_eeg_pair:
+        # Wrap EEG encoder with pretrained quantizer/decoder
+        frame_rate = base_model.frame_rate if hasattr(base_model, 'frame_rate') else 75
+        target_frames = int((config.datasets.tensor_cut / config.model.sample_rate) * frame_rate)
+        model = EEGEncodecWrapper(base_model, frame_rate=frame_rate, target_frames=target_frames)
+    else:
+        model = base_model
     disc_model = MultiScaleSTFTDiscriminator(
         in_channels=config.model.channels,
         out_channels=config.model.channels,
@@ -305,13 +443,13 @@ def train(local_rank,world_size,config,tmp_file=None):
         trainset,
         batch_size=config.datasets.batch_size,
         sampler=train_sampler, 
-        shuffle=(train_sampler is None), collate_fn=collate_fn,
+        shuffle=(train_sampler is None), collate_fn=(eeg_collate_fn if use_eeg_pair else collate_fn),
         pin_memory=config.datasets.pin_memory)
     testloader = torch.utils.data.DataLoader(
         testset,
         batch_size=config.datasets.batch_size,
         sampler=test_sampler, 
-        shuffle=False, collate_fn=collate_fn,
+        shuffle=False, collate_fn=(eeg_collate_fn if use_eeg_pair else collate_fn),
         pin_memory=config.datasets.pin_memory)
     logger.info(f"There are {len(trainloader)} data to train the EnCodec")
     logger.info(f"There are {len(testloader)} data to test the EnCodec")
