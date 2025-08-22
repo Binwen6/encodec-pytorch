@@ -363,6 +363,30 @@ def train(local_rank,world_size,config,tmp_file=None):
         segment=eval(config.model.segment), name=config.model.name,
         ratios=config.model.ratios,
     )
+    # Optionally load pretrained weights (e.g., quantizer/decoder) from checkpoint
+    if use_eeg_pair and hasattr(config.checkpoint, 'checkpoint_path') and config.checkpoint.checkpoint_path:
+        try:
+            ckpt = torch.load(config.checkpoint.checkpoint_path, map_location='cpu')
+            sd = ckpt.get('model_state_dict', ckpt)
+            model_sd = base_model.state_dict()
+            # Filter to matching keys and shapes, prefer quantizer/decoder blocks
+            filtered = {}
+            for k, v in sd.items():
+                if k not in model_sd:
+                    continue
+                if v.shape != model_sd[k].shape:
+                    continue
+                if k.startswith('quantizer') or k.startswith('decoder'):
+                    filtered[k] = v
+            # Fallback: if filtered is too small, allow loading any matching keys
+            if len(filtered) < 10:
+                for k, v in sd.items():
+                    if k in model_sd and v.shape == model_sd[k].shape and k not in filtered:
+                        filtered[k] = v
+            missing, unexpected = base_model.load_state_dict(filtered, strict=False)
+            logger.info(f"Loaded {len(filtered)} weights from checkpoint into base model. Missing: {len(missing)}, Unexpected: {len(unexpected)}")
+        except Exception as e:
+            logger.warning(f"Failed to load checkpoint '{config.checkpoint.checkpoint_path}': {e}")
     if use_eeg_pair:
         # Wrap EEG encoder with pretrained quantizer/decoder
         frame_rate = base_model.frame_rate if hasattr(base_model, 'frame_rate') else 75
